@@ -1089,7 +1089,8 @@ function verDistribucion(){
   const r=state.reuniones.find(x=>x.id===_cuentasRid);
   if(!r)return;
   const asist=r.asistencia||{};
-  const presentes=state.familias.filter(f=>asist[f.id]===true);
+  var presentes=state.familias.filter(f=>asist[f.id]===true);
+  if(_mendezPresentes) presentes=presentes.concat([MENDEZ_FAMILIA]);
   const gastosDivisibles=_cuentasData.filter(g=>g.rubro!=='Ahorro');
   const cuotas=calcularCuotas(presentes);
 
