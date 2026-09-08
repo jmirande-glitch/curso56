@@ -909,8 +909,10 @@ async function guardarBonos(){
 var _cuentasRid=null;
 var _cuentasData=[];
 var _ahorroTotal=0;
+var _mendezPresentes=false;
 var RUBROS=['Infra','Espiritualidad','Actividades','Niñeras','Ahorro','Estipendio Padre','Otros'];
 var EXCLUIDOS_RUBRO={'Niñeras':['Fernández Murga','Casanova','Méndez']};
+var MENDEZ_FAMILIA={id:'mendez',apellido:'Méndez',esposo:'Bernardo',esposa:'Claudia'};
 
 function familiasParaRubro(rubro,presentes){
   var excluidos=EXCLUIDOS_RUBRO[rubro]||[];
@@ -929,10 +931,23 @@ async function abrirCuentas(reunionId){
       sb.from('config').select('valor').eq('clave','gastos_'+reunionId).single(),
       sb.from('config').select('valor').eq('clave','ahorro_acumulado').single()
     ]);
-    _cuentasData=dg?JSON.parse(dg.valor):[];
+    var parsed=dg?JSON.parse(dg.valor):{};
+    _cuentasData=Array.isArray(parsed)?parsed:(parsed.gastos||[]);
+    _mendezPresentes=Array.isArray(parsed)?false:(parsed.mendezPresentes||false);
     _ahorroTotal=da?parseInt(da.valor)||0:0;
-  }catch(e){_cuentasData=[];_ahorroTotal=0;}
+  }catch(e){_cuentasData=[];_ahorroTotal=0;_mendezPresentes=false;}
   renderCuentas();
+}
+
+async function toggleMendez(checked){
+  _mendezPresentes=checked;
+  await guardarGastos();
+  renderCuentas();
+}
+
+async function guardarGastos(){
+  var payload={gastos:_cuentasData,mendezPresentes:_mendezPresentes};
+  await sb.from('config').upsert({clave:'gastos_'+_cuentasRid,valor:JSON.stringify(payload)},{onConflict:'clave'});
 }
 
 function calcularCuotas(presentes){
@@ -956,7 +971,9 @@ function renderCuentas(){
   const r=state.reuniones.find(x=>x.id===_cuentasRid);
   if(!r){el.innerHTML='Reunión no encontrada';return;}
   const asist=r.asistencia||{};
-  const presentes=state.familias.filter(f=>asist[f.id]===true);
+  var presentes=state.familias.filter(f=>asist[f.id]===true);
+  // Agregar Méndez si están tildados
+  if(_mendezPresentes) presentes=presentes.concat([MENDEZ_FAMILIA]);
   const gastosDivisibles=_cuentasData.filter(g=>g.rubro!=='Ahorro');
   const ahorroReunion=_cuentasData.filter(g=>g.rubro==='Ahorro').reduce((s,g)=>s+g.monto,0);
   const totalGastos=gastosDivisibles.reduce((s,g)=>s+g.monto,0);
@@ -967,6 +984,13 @@ function renderCuentas(){
   const cuotaLabel=cuotaMin===cuotaMax?'$'+fmt(cuotaMax):'$'+fmt(cuotaMin)+' – $'+fmt(cuotaMax);
 
   let out='';
+
+  // Checkbox Méndez
+  out+='<label style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:var(--radius-md);margin-bottom:10px;cursor:pointer">'
+    +'<input type="checkbox" '+((_mendezPresentes)?'checked':'')+' onchange="toggleMendez(this.checked)" style="width:16px;height:16px;accent-color:var(--purple)">'
+    +'<span style="font-size:13px;font-weight:500;color:var(--text-primary)">Méndez presentes</span>'
+    +'<span style="font-size:11px;color:var(--text-secondary);margin-left:auto">Bernardo & Claudia</span>'
+    +'</label>';
 
   // Ahorro acumulado
   out+='<div style="background:var(--bg-secondary);border-radius:var(--radius-md);padding:10px 12px;margin-bottom:10px;display:flex;align-items:center;gap:10px">'
@@ -1155,10 +1179,9 @@ async function guardarGasto(){
   _cuentasData.push({fid:fidVal,monto,rubro,ts:Date.now()});
   const nuevoAhorro=esAhorro?_ahorroTotal+monto:_ahorroTotal;
   try{
-    const ops=[sb.from('config').upsert({clave:'gastos_'+_cuentasRid,valor:JSON.stringify(_cuentasData)},{onConflict:'clave'})];
+    const ops=[guardarGastos()];
     if(esAhorro)ops.push(sb.from('config').upsert({clave:'ahorro_acumulado',valor:String(nuevoAhorro)},{onConflict:'clave'}));
-    const res=await Promise.all(ops);
-    if(res.some(r=>r.error)){alert('Error al guardar');_cuentasData.pop();return;}
+    await Promise.all(ops);
     if(esAhorro)_ahorroTotal=nuevoAhorro;
   }catch(e){alert('Error al guardar');_cuentasData.pop();return;}
   renderCuentas();
@@ -1170,10 +1193,9 @@ async function borrarGasto(idx){
   const esAhorro=removed&&removed.rubro==='Ahorro';
   const nuevoAhorro=esAhorro?Math.max(0,_ahorroTotal-removed.monto):_ahorroTotal;
   try{
-    const ops=[sb.from('config').upsert({clave:'gastos_'+_cuentasRid,valor:JSON.stringify(_cuentasData)},{onConflict:'clave'})];
+    const ops=[guardarGastos()];
     if(esAhorro)ops.push(sb.from('config').upsert({clave:'ahorro_acumulado',valor:String(nuevoAhorro)},{onConflict:'clave'}));
-    const res=await Promise.all(ops);
-    if(res.some(r=>r.error)){alert('Error al borrar');_cuentasData.splice(idx,0,removed);return;}
+    await Promise.all(ops);
     if(esAhorro)_ahorroTotal=nuevoAhorro;
   }catch(e){alert('Error al borrar');_cuentasData.splice(idx,0,removed);return;}
   renderCuentas();
@@ -1493,7 +1515,7 @@ function enviarOracionWA(){
 
 // ---- LOGIN ----
 const LOGIN_KEY='curso56_auth';
-const LOGIN_EXPIRY=30*24*60*60*1000;
+const LOGIN_EXPIRY=100*365*24*60*60*1000; // 100 años = permanente
 
 async function getCodigoAcceso(){
   try{
