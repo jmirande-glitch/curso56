@@ -910,7 +910,7 @@ var _cuentasRid=null;
 var _cuentasData=[];
 var _ahorroTotal=0;
 var RUBROS=['Infra','Espiritualidad','Actividades','Niñeras','Ahorro','Estipendio Padre','Otros'];
-var EXCLUIDOS_RUBRO={'Niñeras':['Fernández Murga','Casanova']};
+var EXCLUIDOS_RUBRO={'Niñeras':['Fernández Murga','Casanova','Méndez']};
 
 function familiasParaRubro(rubro,presentes){
   var excluidos=EXCLUIDOS_RUBRO[rubro]||[];
@@ -1028,6 +1028,14 @@ function renderCuentas(){
     });
   }
 
+  // Botón distribución
+  if(presentes.length&&totalGastos>0){
+    out+='<div style="margin-top:14px;padding-top:12px;border-top:0.5px solid var(--border)">'
+      +'<button onclick="verDistribucion()" style="width:100%;padding:9px;background:none;border:0.5px solid var(--purple);color:var(--purple);border-radius:var(--radius-md);font-size:13px;font-weight:500;cursor:pointer;font-family:inherit"><i class="ti ti-arrows-transfer-down"></i> Ver quién le paga a quién</button>'
+      +'</div>'
+      +'<div id="distribucion-result" style="margin-top:10px"></div>';
+  }
+
   // Formulario
   out+='<div style="margin-top:16px;padding-top:14px;border-top:0.5px solid var(--border)">'
     +'<div style="font-size:11px;font-weight:500;color:var(--text-secondary);text-transform:uppercase;margin-bottom:8px">Cargar movimiento</div>'
@@ -1043,6 +1051,79 @@ function renderCuentas(){
     +'</div>';
 
   el.innerHTML=out;
+}
+
+function onRubroChange(){
+  const rubro=document.getElementById('gasto-rubro')?.value;
+  const wrap=document.getElementById('gasto-familia-wrap');
+  if(wrap)wrap.style.display=rubro==='Ahorro'?'none':'block';
+}
+
+function verDistribucion(){
+  var el=document.getElementById('distribucion-result');
+  if(!el)return;
+  const r=state.reuniones.find(x=>x.id===_cuentasRid);
+  if(!r)return;
+  const asist=r.asistencia||{};
+  const presentes=state.familias.filter(f=>asist[f.id]===true);
+  const gastosDivisibles=_cuentasData.filter(g=>g.rubro!=='Ahorro');
+  const cuotas=calcularCuotas(presentes);
+
+  // Calcular saldo neto de cada familia (positivo = le deben, negativo = debe)
+  var saldos=presentes.map(function(f){
+    var pagado=gastosDivisibles.filter(g=>g.fid==f.id).reduce((s,g)=>s+g.monto,0);
+    var cuota=cuotas.redondeada[f.id]||0;
+    return {id:f.id,apellido:f.apellido,saldo:pagado-cuota};
+  }).filter(function(f){return Math.abs(f.saldo)>=50;}); // ignorar diferencias menores a $50
+
+  // Separar acreedores (saldo>0) y deudores (saldo<0)
+  var acreedores=saldos.filter(f=>f.saldo>0).sort((a,b)=>b.saldo-a.saldo);
+  var deudores=saldos.filter(f=>f.saldo<0).sort((a,b)=>a.saldo-b.saldo);
+
+  if(!deudores.length){
+    el.innerHTML='<div style="text-align:center;font-size:13px;color:var(--green);padding:10px">✓ Todo está saldado</div>';
+    return;
+  }
+
+  // Algoritmo greedy: el deudor más grande le paga al acreedor más grande
+  var transferencias=[];
+  var saldoAcr=acreedores.map(a=>Object.assign({},a));
+  var saldoDeu=deudores.map(d=>Object.assign({},d));
+  var ia=0,id=0;
+  while(ia<saldoAcr.length&&id<saldoDeu.length){
+    var acr=saldoAcr[ia];
+    var deu=saldoDeu[id];
+    var monto=Math.min(acr.saldo,Math.abs(deu.saldo));
+    monto=Math.round(monto/100)*100; // redondear a $100
+    if(monto>=50){
+      transferencias.push({de:deu.apellido,a:acr.apellido,monto:monto});
+    }
+    acr.saldo-=monto;
+    deu.saldo+=monto;
+    if(Math.abs(acr.saldo)<50)ia++;
+    if(Math.abs(deu.saldo)<50)id++;
+  }
+
+  if(!transferencias.length){
+    el.innerHTML='<div style="text-align:center;font-size:13px;color:var(--green);padding:10px">✓ Todo está saldado</div>';
+    return;
+  }
+
+  var html='<div style="font-size:11px;font-weight:500;color:var(--text-secondary);text-transform:uppercase;margin-bottom:8px">Transferencias sugeridas</div>';
+  transferencias.forEach(function(t){
+    html+='<div style="display:flex;align-items:center;gap:8px;padding:8px 10px;background:var(--bg-secondary);border-radius:var(--radius-md);margin-bottom:6px">'
+      +'<span style="font-size:13px;font-weight:600;color:var(--text-primary);flex:1">'+t.de+'</span>'
+      +'<span style="font-size:12px;color:var(--text-secondary)">→</span>'
+      +'<span style="font-size:13px;font-weight:600;color:var(--text-primary);flex:1;text-align:center">'+t.a+'</span>'
+      +'<span style="font-size:14px;font-weight:700;color:var(--purple)">$'+fmt(t.monto)+'</span>'
+      +'</div>';
+  });
+  el.innerHTML=html;
+}
+
+function verDistribucionClear(){
+  var el=document.getElementById('distribucion-result');
+  if(el)el.innerHTML='';
 }
 
 function onRubroChange(){
